@@ -1,0 +1,123 @@
+import google.generativeai as genai
+import speech_recognition as sr
+import webbrowser
+import re
+class ChatGPTAssistant:
+    def __init__(self, api_key: str):
+        """Initialize the assistant with Gemini API."""
+        self.api_key = api_key
+
+        # Configure the Gemini API
+        genai.configure(api_key=self.api_key)
+        self.model = genai.GenerativeModel('gemini-pro')
+        self.chat = self.model.start_chat(history=[])
+
+        # No initial prompt needed, default system behavior allows all topics.
+
+    def send_query(self, user_query: str) -> str:
+        """Send a query to the AI and get the response."""
+        try:
+            response = self.chat.send_message(user_query)
+            print(response.text)
+            return response.text
+        except Exception as e:
+            print(f"Error communicating with AI: {str(e)}")
+
+    def listen(self) -> str:
+        """Listen for audio input from the user and convert to text."""
+        recognizer = sr.Recognizer()
+        microphone = sr.Microphone()
+
+        with microphone as source:
+            print("Listening for your question...")
+            recognizer.adjust_for_ambient_noise(source)
+            audio = recognizer.listen(source)
+
+        try:
+            print("You said: ", end="")
+            query = recognizer.recognize_google(audio)
+            print(query)
+            return query
+        except sr.UnknownValueError:
+            print("Sorry, I did not understand that.")
+            return "Sorry, I did not understand that."
+        except sr.RequestError:
+            print("Sorry, I'm having trouble connecting to the speech recognition service.")
+            return "Sorry, I'm having trouble connecting to the speech recognition service."
+
+    def open_website(self, command: str):
+        """Open websites based on user command."""
+        if 'open youtube' in command.lower():
+            webbrowser.open("https://www.youtube.com")
+            print("Opening YouTube")
+        elif 'open google' in command.lower():
+            webbrowser.open("https://www.google.com")
+            print("Opening Google")
+        elif 'search' in command.lower():
+            search_query = self.extract_search_query(command)
+            if search_query:
+                search_url = f"https://www.google.com/search?q={search_query}"
+                webbrowser.open(search_url)
+                print(f"Searching for {search_query} on Google")
+            else:
+                print("Sorry, I could not find a search query.")
+        else:
+            print("Sorry, I cannot recognize that command.")
+
+    def extract_search_query(self, command: str) -> str:
+        """Extract search query from the user's command."""
+        search_pattern = r"search\s+(.+)"
+        match = re.search(search_pattern, command.lower())
+        if match:
+            return match.group(1)
+        return None
+
+
+# Main Program
+def main():
+    gemini_api_key = "AIzaSyDyTI5WDBNYwHbAYCESR2eagfmYSzf97xw"  # Replace with your actual API key
+
+    assistant = ChatGPTAssistant(gemini_api_key)
+
+    print("\n=== Welcome to the General Purpose AI Assistant! ===")
+    print("I'm here to assist you with anything you need, whether it's general knowledge, health, technology, or more.")
+
+    # Prompt for interaction type only once
+    interaction_choice = input("\nWould you like to interact via:\n1. Voice\n2. Text\nEnter 1 or 2: ").strip().lower()
+
+    while True:
+        if interaction_choice == "1":
+            # If Voice is chosen, listen to user input
+            user_input = assistant.listen()
+
+            if user_input.lower() == "exit":
+                print("Goodbye!")
+                break
+
+            if 'open' in user_input.lower() or 'search' in user_input.lower():
+                assistant.open_website(user_input)
+            else:
+                ai_response = assistant.send_query(user_input)
+                print("AI Response: ", ai_response)
+
+        elif interaction_choice == "2":
+            # If Text is chosen, take text input
+            user_input = input("You can ask questions or give commands: ").strip().lower()
+
+            if user_input == "exit":
+                print("Goodbye!")
+                break
+
+            if 'open' in user_input or 'search' in user_input:
+                assistant.open_website(user_input)
+            else:
+                ai_response = assistant.send_query(user_input)
+                print("AI Response: ", ai_response)
+
+        else:
+            print("Invalid choice. Please enter 1 for Voice or 2 for Text.")
+            interaction_choice = input("Enter 1 or 2: ").strip().lower()  # Re-prompt for correct choice
+
+
+if __name__ == "__main__":
+    main()

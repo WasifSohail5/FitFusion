@@ -1,0 +1,325 @@
+
+class LoginSignupApp(QWidget):
+    def __init__(self, api_key,gemini_api_key):
+        super().__init__()
+        self.fitness_ai_assistant = FitnessAIAssistant(gemini_api_key)
+        self.meal_planner = MealPlanner(api_key)  # Create an instance of MealPlanner
+
+        self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone(sample_rate=16000, chunk_size=1024)
+        self.voice_assistant_active = False
+        # Pre-adjust ambient noise once during initialization
+        with self.microphone as source:
+            self.recognizer.adjust_for_ambient_noise(source)
+
+        self.setWindowTitle('FitFusion: Fitness Tracker')
+        self.setGeometry(100, 100, 800, 600)  # Set window size
+        self.central_widget = QStackedWidget(self)
+
+        self.setLayout(QVBoxLayout())
+        self.layout().addWidget(self.central_widget)
+
+        # Add back and forward buttons
+        self.back_button = QPushButton("Back")
+        self.forward_button = QPushButton("Forward")
+
+        # Set button styles
+        self.set_back_button_style(self.back_button)
+        self.set_forward_button_style(self.forward_button)
+
+        # Connect buttons to their respective functions
+        self.back_button.clicked.connect(self.go_back)
+        self.forward_button.clicked.connect(self.go_forward)
+
+        # Add buttons to the layout
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.back_button)
+        button_layout.addWidget(self.forward_button)
+
+        self.layout().addLayout(button_layout)
+
+        # Initialize history stack
+        self.history = []
+        self.current_index = -1
+
+        self.init_main_ui()
+        self.init_login_ui()
+        self.init_signup_ui()
+        self.init_forgot_password_ui()
+        self.init_welcome_ui()
+
+        self.central_widget.setCurrentIndex(0)  # Start with the main UI
+        self.add_to_history(0)  # Add main UI to history
+
+
+    def login_database(self):
+        """Check credentials in the database for login"""
+        email = self.login_email.text().strip()
+        password = self.login_password.text().strip()
+
+        try:
+            conn = sqlite3.connect("1.db")
+            cur = conn.cursor()
+            cur.execute("SELECT id, name FROM test WHERE email=? AND password=?", (email, password))
+            row = cur.fetchone()
+        except sqlite3.Error as e:
+            self.login_feedback.setStyleSheet("font-size: 25px; color: red;")
+            self.login_feedback.setText(f"Database error: {e}")
+            return
+        finally:
+            conn.close()  # Ensure the connection is closed
+
+        if row:
+            user_id, user_name = row
+            self.login_feedback.setStyleSheet("font-size: 25px; color: white;")
+            self.login_feedback.setText(f"Login successful. Welcome {user_name}!")
+
+            # Update streak after login
+            self.update_streak(user_id)
+            self.update_streak_display(user_id)
+
+            self.show_welcome_frame(user_name)  # Show welcome frame upon successful login
+        else:
+            self.login_feedback.setStyleSheet("font-size: 25px; color: white;")
+            self.login_feedback.setText("No such user found. Please sign up or check your credentials.")
+
+    def signup_database(self):
+        """Handle database actions for signup"""
+        name = self.signup_name.text().strip()
+        email = self.signup_email.text().strip()
+        password = self.signup_password.text().strip()
+
+        if not name or not email or not password:
+            self.signup_feedback.setText("Please fill in all fields.")
+            return
+
+        conn = sqlite3.connect("1.db")
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS test(id INTEGER PRIMARY KEY, name TEXT, email TEXT, password TEXT)")
+        cur.execute("INSERT INTO test (name, email, password) VALUES (?, ?, ?)", (name, email, password))
+
+        conn.commit()
+        conn.close()
+
+        self.signup_feedback.setText("Account created successfully!")
+        self.signup_name.clear()
+        self.signup_email.clear()
+        self.signup_password.clear()
+        self.central_widget.setCurrentIndex(0)  # Go back to main UI
+        self.add_to_history(0)  # Add main UI to history  def init_tabs(self, user_name):
+        """Initialize the tabbed interface after login"""
+        tabs_widget = QWidget()
+        tabs_layout = QVBoxLayout(tabs_widget)
+
+        # Create QTabWidget
+        self.tabs = QTabWidget()
+
+        # Apply the updated style sheet for colorful and fitting tab buttons
+        self.tabs.setStyleSheet("""
+            QTabBar::tab {
+                background-color: #E1BEE7;  /* Light purple background */
+                color: black;               /* Black text for contrast */
+                font-size: 14px;            /* Font size */
+                padding: 10px 25px;         /* Ensure proper padding for better visibility */
+                border: 1px solid #ccc;     /* Border around tabs */
+                border-bottom: none;        /* Smooth look */
+                border-radius: 4px;         /* Rounded corners */
+                min-width: 100px;           /* Minimum width to prevent truncation */
+            }
+
+            QTabBar::tab:selected {
+                background-color: #D81B60;  /* Darker purple for selected tab */
+                font-weight: bold;          /* Bold text for selected tab */
+            }
+
+            QTabBar::tab:hover {
+                background-color: #D5006D;  /* Lighter purple on hover */
+            }
+
+            QTabWidget::pane {
+                border: 1px solid #ccc;     /* Border around tab content */
+                border-top: none;           /* Merge content with tabs */
+            }
+        """)
+
+        # Allow tabs to expand with window size
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Add the QTabWidget to the layout
+        tabs_layout.addWidget(self.tabs)
+
+        # Create tabs
+        self.create_workout_planner_tab()
+        self.create_streak_tab()
+        self.create_bmi_visualization_tab()
+        self.create_meal_planner_tab()
+        self.create_interactive_assistant_tab()
+        self.create_help_tab()
+
+        # Set the tabs widget as the central widget
+        self.central_widget.addWidget(tabs_widget)
+        self.central_widget.setCurrentWidget(tabs_widget)  # Show the tabs widget
+
+        # Use stretch to ensure resizing affects tab size properly
+        tabs_layout.setStretch(0, 1)  # Allow the tab widget to stretch
+
+    def generate_workout_plan(self):
+        muscle_group = self.muscle_group_combo.currentText()
+        exercise_name = self.exercise_name_input.text().strip()
+        exercise_type = self.exercise_type_combo.currentText()
+        difficulty = self.difficulty_combo.currentText()
+
+        try:
+            total_time = float(self.workout_duration_input.text().strip())
+        except ValueError:
+            self.workout_plan_output.setPlainText("Please enter a valid number for duration.")
+            return
+
+        if not muscle_group and not exercise_name and not exercise_type:
+            self.workout_plan_output.setPlainText("Please specify at least one filter.")
+            return
+
+        # Fetch exercises using the API
+        planner = WorkoutPlanner(api_key="1c55tgO/oZW1c40Dtz+PxQ==hGupNoi6khvXO6Xv")
+        exercises = planner.get_exercises(muscle=muscle_group, name=exercise_name, exercise_type=exercise_type)
+
+        if difficulty:
+            exercises = planner.filter_exercises(exercises, 'difficulty', difficulty)
+
+        # Format and display the workout plan
+        formatted_plan = planner.format_exercise_details(exercises, total_time)
+        self.workout_plan_output.setHtml(formatted_plan)
+
+        # Update streak and display
+        self.update_streak(self.user_id)  # Replace self.user_id with the current logged-in user ID
+        self.update_streak_display(self.user_id)
+
+
+
+
+
+    def notify_streak_milestone(self, current_streak):
+        if current_streak in [7, 30, 100]:  # Milestones
+            QMessageBox.information(self, "Congratulations!", f"You're on a {current_streak}-day streak! Keep it up!")
+
+
+
+    def create_streak_table(self):
+        conn = sqlite3.connect("1.db")
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS streaks (
+                user_id INTEGER PRIMARY KEY,
+                current_streak INTEGER NOT NULL,
+                longest_streak INTEGER NOT NULL,
+                last_active_date TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES test(id)
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    def update_streak(self, user_id):
+        conn = sqlite3.connect("1.db")
+        cur = conn.cursor()
+        cur.execute("SELECT current_streak, longest_streak, last_active_date FROM streaks WHERE user_id = ?",
+                    (user_id,))
+        row = cur.fetchone()
+
+        today = datetime.date.today().isoformat()
+        if row:
+            current_streak, longest_streak, last_active_date = row
+            last_date = datetime.date.fromisoformat(last_active_date)
+
+            if last_date == datetime.date.today():
+                pass
+            elif last_date == datetime.date.today() - datetime.timedelta(days=1):
+                current_streak += 1
+                longest_streak = max(longest_streak, current_streak)
+                self.notify_streak_milestone(current_streak)  # Notify milestone
+            else:
+                current_streak = 1
+
+            # Update record
+            cur.execute("""
+                UPDATE streaks SET current_streak = ?, longest_streak = ?, last_active_date = ?
+                WHERE user_id = ?
+            """, (current_streak, longest_streak, today, user_id))
+        else:
+            # New entry for this user
+            cur.execute("""
+                INSERT INTO streaks (user_id, current_streak, longest_streak, last_active_date)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, 1, 1, today))
+
+        conn.commit()
+        conn.close()
+
+    def get_streak(self, user_id):
+        conn = sqlite3.connect("1.db")
+        cur = conn.cursor()
+        cur.execute("SELECT current_streak, longest_streak FROM streaks WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        conn.close()
+        return row or (0, 0)
+
+    def create_streak_tab(self):
+        streak_tab = QWidget()
+        layout = QVBoxLayout(streak_tab)
+
+        label = QLabel("Streak Tracker", self)
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet("font-size: 30px; font-weight: bold; color: white;")
+        layout.addWidget(label)
+
+        # Display streaks
+        self.streak_display = QLabel("Current Streak: 0 | Longest Streak: 0", self)
+        self.streak_display.setAlignment(Qt.AlignCenter)
+        self.streak_display.setStyleSheet("font-size: 20px; color: #42a5f5;")
+        layout.addWidget(self.streak_display)
+
+        # Reset and view progress buttons
+        button_reset = QPushButton("Reset Streak", self)
+        button_view = QPushButton("View Progress", self)
+
+        self.set_button_style(button_reset)
+        self.set_button_style(button_view)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(button_reset)
+        button_layout.addWidget(button_view)
+
+        layout.addLayout(button_layout)
+        button_reset.clicked.connect(self.reset_streak)
+        button_view.clicked.connect(self.view_streak_progress)
+
+        self.tabs.addTab(streak_tab, "Streak")
+
+    def update_streak_display(self, user_id):
+        current, longest = self.get_streak(user_id)
+        self.streak_display.setText(f"Current Streak: {current} | Longest Streak: {longest}")
+  def generate_meal_plan(self):
+        try:
+            target_calories = int(self.calories_input.text())
+            meal_plan = self.meal_planner.get_meal_plan(target_calories)
+
+            if meal_plan and "meals" in meal_plan:
+                meals = ""
+                for meal in meal_plan["meals"]:
+                    meals += f"<b>- {meal['title']}</b><br>"
+                    meals += f"  Ready in: {meal['readyInMinutes']} minutes<br>"
+                    meals += f"  Servings: {meal['servings']}<br>"
+                    meals += f"  Recipe Link: {meal['sourceUrl']}<br><br>"  # Display URL directly
+
+                self.meal_plan_output.setHtml(f"<h3>Recommended Meals:</h3>{meals}")
+
+                # Update streak and display
+                self.update_streak(self.user_id)  # Replace self.user_id with the current logged-in user ID
+                self.update_streak_display(self.user_id)
+            else:
+                self.meal_plan_output.setPlainText("Failed to generate meal plan.")
+        except ValueError:
+            self.meal_plan_output.setPlainText("Please enter a valid number for target calories.")
+        except Exception as e:
+            self.meal_plan_output.setPlainText(f"An error occurred: {e}")
+
+
